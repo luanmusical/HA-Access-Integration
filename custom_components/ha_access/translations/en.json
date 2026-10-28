@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-Access",
+        "description": "Add HA-Access. Each computer running the HA-Access program shows up here as a device when it connects."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "HA-Access is already set up."
+    }
+  },
+  "services": {
+    "enviar_texto": {
+      "name": "Send text to command",
+      "description": "Runs the computer command with a text (for example the volume, or the arguments).",
+      "fields": {
+        "texto": {
+          "name": "Texto",
+          "description": "The text the command receives."
+        }
+      }
+    }
+  },
+  "issues": {
+    "integracao_velha": {
+      "title": "Update the HA-Access integration",
+      "description": "The HA-Access program on {nome} (version {versao_programa}) is newer than this integration (version {versao}). Update the HA-Access integration in HACS and restart Home Assistant."
+    },
+    "programa_velho": {
+      "title": "Update the HA-Access program on {nome}",
+      "description": "The HA-Access program on {nome} (version {versao_programa}) is too old for this integration (version {versao}). Update the program on that computer."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "acao_notificacao": "A notification button was pressed"
+    },
+    "extra_fields": {
+      "acao": "Action (empty = any button)"
+    }
+  }
+}

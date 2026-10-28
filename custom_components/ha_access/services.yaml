@@ -1,0 +1,10 @@
+enviar_texto:
+  target:
+    entity:
+      integration: ha_access
+  fields:
+    texto:
+      required: true
+      example: "50"
+      selector:
+        text:

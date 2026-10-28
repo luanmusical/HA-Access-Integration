@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-Access",
+        "description": "Adicionar o HA-Access. Cada computador com o programa HA-Access aparece aqui como um aparelho quando se conecta."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "O HA-Access já está configurado."
+    }
+  },
+  "services": {
+    "enviar_texto": {
+      "name": "Enviar texto ao comando",
+      "description": "Executa o comando do computador com um texto (por exemplo o volume, ou os argumentos).",
+      "fields": {
+        "texto": {
+          "name": "Texto",
+          "description": "O texto que o comando recebe."
+        }
+      }
+    }
+  },
+  "issues": {
+    "integracao_velha": {
+      "title": "Atualize a integração HA-Access",
+      "description": "O programa HA-Access em {nome} (versão {versao_programa}) é mais novo que esta integração (versão {versao}). Atualize a integração HA-Access no HACS e reinicie o Home Assistant."
+    },
+    "programa_velho": {
+      "title": "Atualize o programa HA-Access em {nome}",
+      "description": "O programa HA-Access em {nome} (versão {versao_programa}) é antigo demais para esta integração (versão {versao}). Atualize o programa naquele computador."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "acao_notificacao": "Um botão da notificação foi apertado"
+    },
+    "extra_fields": {
+      "acao": "Ação (vazio = qualquer botão)"
+    }
+  }
+}
