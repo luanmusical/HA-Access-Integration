@@ -1,10 +1,6 @@
 {
   "domain": "ha_access",
   "name": "HA-Access",
-  "categories": [
-    "computers_network",
-    "messaging_notifications"
-  ],
   "codeowners": [
     "@luanmusical"
   ],
