@@ -19,7 +19,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import slugify
 
-from .const import (DOMAIN, FABRICANTE, ID_CONECTADO, ID_NOTIFICACAO, PLATAFORMAS_COMANDO, PLATAFORMAS_SENSOR,
+from .const import (APARELHOS_POR_USUARIO, DOMAIN, FABRICANTE, ID_CONECTADO, ID_NOTIFICACAO, PLATAFORMAS_COMANDO, PLATAFORMAS_SENSOR,
                     SINAL_MAXIMO, VERSAO_STORE)
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,7 +50,8 @@ class Aparelho:
 
     @property
     def alvo_notify(self):
-        return slugify(self.nome)
+        # "alvo" gravado só quando o nome bate com o de outro computador (ver Hub._alvo_unico)
+        return self.info.get("alvo") or slugify(self.nome)
 
     @property
     def conectado(self):
@@ -106,12 +107,28 @@ class Hub:
     # -- quem pode falar por um computador ------------------------------------------------
     def autorizado(self, serial, usuario, admin):
         """O computador fica preso ao usuário que o apresentou primeiro ("dono"); administradores
-        podem tudo. Assim um usuário não se passa pelo computador de outro."""
+        podem tudo. Assim um usuário não se passa pelo computador de outro. Computador
+        desconhecido ou sem dono gravado: só administrador (o dono é gravado ao conectar)."""
         ap = self.aparelhos.get(serial)
-        if ap is None:
+        if ap is None or usuario is None:
             return False
         dono = ap.info.get("dono")
-        return admin or dono is None or dono == usuario
+        return admin or (dono is not None and dono == usuario)
+
+    def pode_conectar(self, serial, usuario, admin):
+        """Conectar: computador novo, sem dono (gravado antes de existir o dono) ou do próprio usuário."""
+        if usuario is None:
+            raise PermissionError("Conexão sem usuário do Home Assistant")
+        ap = self.aparelhos.get(serial)
+        if ap is None:
+            if not admin and sum(1 for a in self.aparelhos.values()
+                                 if a.info.get("dono") == usuario) >= APARELHOS_POR_USUARIO:
+                raise PermissionError(f"Limite de {APARELHOS_POR_USUARIO} computadores por usuário atingido; "
+                                      "exclua um computador antigo ou peça a um administrador")
+            return
+        if ap.info.get("dono") is None or self.autorizado(serial, usuario, admin):
+            return
+        raise PermissionError("Este computador pertence a outro usuário do Home Assistant")
 
     @callback
     def sinal(self, serial):
@@ -133,9 +150,8 @@ class Hub:
         serial = msg["serial"]
         novo_info = {k: msg[k] for k in ("nome", "modelo", "versao", "notificacoes", "media_player",
                                           "sensores", "comandos")}
+        self.pode_conectar(serial, usuario, admin)          # PermissionError com o motivo
         ap = self.aparelhos.get(serial)
-        if ap is not None and not self.autorizado(serial, usuario, admin):
-            raise PermissionError(ap.nome)
         novo_info["dono"] = (ap.info.get("dono") if ap is not None else None) or usuario
         antes = set()
         if ap is None:
@@ -149,6 +165,7 @@ class Hub:
                     novos = {d["id"] for d in novo_info[lista]}
                     novo_info[lista] = novo_info[lista] + [d for d in ap.info.get(lista, []) if d["id"] not in novos]
             ap.info = novo_info
+        self._alvo_unico(ap)
         ap.device_id = self._registrar_aparelho(ap)
         if ap.enviar is not None and ap.enviar is not enviar:
             # outra conexão do mesmo computador (reconectou antes da antiga cair)
@@ -164,6 +181,19 @@ class Hub:
         if self.notify is not None:
             await self.notify.async_register_services()
         return ap
+
+    def _alvo_unico(self, ap):
+        """Dois computadores com o mesmo nome não podem dividir notify.ha_access_<nome>: senão quem
+        desse ao seu computador o nome do de outra pessoa receberia as notificações dela. O que
+        já tinha o nome fica com ele; o outro ganha um final com o começo do serial. Entre
+        computadores do mesmo dono nada muda (o último conectado fica com o nome, como antes)."""
+        ap.info.pop("alvo", None)
+        base = slugify(ap.nome)
+        dono = ap.info.get("dono")
+        outros = {a.alvo_notify for s, a in self.aparelhos.items()
+                  if s != ap.serial and a.info.get("dono") != dono}
+        if base in outros:
+            ap.info["alvo"] = f"{base}_{slugify(ap.serial)[:8]}"
 
     async def definir(self, serial, sensores, comandos):
         ap = self.aparelhos.get(serial)

@@ -46,6 +46,9 @@ O programa HA-Access também faz esses passos sozinho, na janela "Conectar ao Ho
 
 - **Tudo local.** Nada passa por servidores de terceiros.
 - **Cada computador fica preso ao usuário do Home Assistant que o cadastrou.** Outro usuário comum não consegue se passar por ele; administradores podem tudo.
+- **Computador desconhecido não manda nada.** Só a conexão (`ha_access/conectar`) apresenta um computador novo. Etiqueta NFC, botão de notificação, estados, mídia e sinal de vida são recusados para um computador que a integração não conhece ou que é de outro usuário.
+- **Notificações não se misturam.** Se dois usuários derem o mesmo nome aos seus computadores, cada um continua com o seu `notify.ha_access_<nome>`: o segundo ganha um final com o começo do serial.
+- **Tudo o que chega do programa tem tamanho e formato conferidos**, e um usuário comum apresenta no máximo 20 computadores.
 - **Versões combinadas.** O programa e a integração conferem a versão ao conectar. Se uma estiver velha demais, aparece um aviso em Reparos dizendo o que atualizar.
 
 ### Licença
@@ -89,6 +92,9 @@ The HA-Access program can do these steps for you.
 
 - Everything stays local.
 - Each computer is bound to the Home Assistant user that registered it; admins can do anything.
+- Unknown computers cannot send anything. Only `ha_access/conectar` introduces a new computer; tag scans, notification actions, states, media and heartbeats are refused for a computer the integration does not know or that belongs to another user.
+- Notification targets never collide across users: if two users give their computers the same name, the second one gets a suffix taken from its serial.
+- Every message from the program is size- and format-checked, and a non-admin user can register at most 20 computers.
 - The program and the integration check each other's protocol version and raise a Repairs issue when one of them must be updated.
 
 ### License
