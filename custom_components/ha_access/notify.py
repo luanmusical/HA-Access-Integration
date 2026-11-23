@@ -21,6 +21,7 @@ async def async_setup_entry(hass, entry, adicionar):
 
 class NotificacaoHaAccess(EntidadeHaAccess, NotifyEntity):
     _attr_supported_features = NotifyEntityFeature.TITLE
+    _attr_translation_key = "notificacao"   # "Notificação" / "Notification", no idioma do HA
 
     async def async_send_message(self, message, title=None):
         dados = {"message": message, "title": title or "", "data": {}}
@@ -34,6 +35,7 @@ async def async_get_service(hass, config, discovery_info=None):
         return None
     servico = ServicoNotificacao(hass)
     hub.notify = servico
+    hass.data[f"{DOMAIN}_notify"] = servico   # recarregar a integração reaproveita (o HA não chama de novo)
     return servico
 
 

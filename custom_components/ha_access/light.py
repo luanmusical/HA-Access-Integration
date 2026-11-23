@@ -18,7 +18,7 @@ class LuzHaAccess(ComandoHaAccess, LightEntity):
         return self.ligado
 
     async def async_turn_on(self, **kwargs):
-        self._mandar("on")
+        await self._mandar("on")
 
     async def async_turn_off(self, **kwargs):
-        self._mandar("off")
+        await self._mandar("off")

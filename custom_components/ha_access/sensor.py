@@ -15,8 +15,8 @@ async def async_setup_entry(hass, entry, adicionar):
 
 
 class SensorHaAccess(EntidadeHaAccess, RestoreSensor):
-    def __init__(self, aparelho, definicao, plataforma):
-        super().__init__(aparelho, definicao, plataforma)
+    def aplicar(self, definicao):
+        super().aplicar(definicao)
         self._attr_native_unit_of_measurement = definicao.get("unidade") or None
         try:
             self._attr_device_class = SensorDeviceClass(definicao["device_class"]) \
@@ -28,6 +28,9 @@ class SensorHaAccess(EntidadeHaAccess, RestoreSensor):
                 if definicao.get("state_class") else None
         except ValueError:
             self._attr_state_class = None
+        # lista de valores possíveis (sensor de escolha, como o HA mostra nas automações)
+        self._attr_options = list(definicao["opcoes"]) if (
+            self._attr_device_class == SensorDeviceClass.ENUM and definicao.get("opcoes")) else None
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -42,6 +45,11 @@ class SensorHaAccess(EntidadeHaAccess, RestoreSensor):
         v = (self.ap.valores.get(self.ident) or {}).get("estado")
         if v is None or v == "":
             return None
+        if self._attr_device_class == SensorDeviceClass.DATE:      # o HA exige um objeto data
+            try:
+                return dt_util.parse_date(str(v)[:10])
+            except ValueError:
+                return None
         if self._attr_device_class == SensorDeviceClass.TIMESTAMP:
             d = dt_util.parse_datetime(str(v))
             if d is not None and d.tzinfo is None:
@@ -53,7 +61,10 @@ class SensorHaAccess(EntidadeHaAccess, RestoreSensor):
                 return float(str(v).replace(",", "."))
             except ValueError:
                 return None
-        return str(v)[:_TEXTO_MAX]
+        v = str(v)[:_TEXTO_MAX]
+        if self._attr_options and v not in self._attr_options:
+            return None                  # o HA recusa valor fora da lista
+        return v
 
     @property
     def extra_state_attributes(self):

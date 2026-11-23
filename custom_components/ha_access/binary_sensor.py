@@ -18,6 +18,7 @@ class ConectadoHaAccess(EntidadeHaAccess, BinarySensorEntity):
     """Ligado enquanto o programa está conectado (e mandando sinal de vida)."""
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "conectado"     # "Conectado" / "Connected", no idioma do HA
 
     @property
     def available(self):
@@ -29,8 +30,8 @@ class ConectadoHaAccess(EntidadeHaAccess, BinarySensorEntity):
 
 
 class BinarioHaAccess(EntidadeHaAccess, BinarySensorEntity, RestoreEntity):
-    def __init__(self, aparelho, definicao, plataforma):
-        super().__init__(aparelho, definicao, plataforma)
+    def aplicar(self, definicao):
+        super().aplicar(definicao)
         try:
             self._attr_device_class = BinarySensorDeviceClass(definicao["device_class"]) \
                 if definicao.get("device_class") else None

@@ -25,11 +25,15 @@
   "issues": {
     "integracao_velha": {
       "title": "Update the HA-Access integration",
-      "description": "The HA-Access program on {nome} (version {versao_programa}) is newer than this integration (version {versao}). Update the HA-Access integration in HACS and restart Home Assistant."
+      "description": "The HA-Access program on {nome} (version {versao_programa}) is newer than this integration (version {versao}). Update the HA-Access integration in the Marketplace (or in HACS) and restart Home Assistant."
     },
     "programa_velho": {
       "title": "Update the HA-Access program on {nome}",
       "description": "The HA-Access program on {nome} (version {versao_programa}) is too old for this integration (version {versao}). Update the program on that computer."
+    },
+    "programa_desatualizado": {
+      "title": "Update the HA-Access program on {nome}",
+      "description": "The HA-Access program on {nome} is version {versao_programa}. It works, but version {recomendada} or newer fixes important problems. Update the program on that computer (it offers the update when it opens). This notice goes away when the computer connects up to date."
     }
   },
   "device_automation": {
@@ -38,6 +42,29 @@
     },
     "extra_fields": {
       "acao": "Action (empty = any button)"
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "conectado": {
+        "name": "Connected"
+      }
+    },
+    "notify": {
+      "notificacao": {
+        "name": "Notification"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HA-Access options",
+        "description": "On: each computer's commands, media player and text only obey the user who added it (the owner) and administrators. Automations keep working. Off (default): any Home Assistant user can control it.",
+        "data": {
+          "so_dono": "Only the computer's owner and administrators can control it"
+        }
+      }
     }
   }
 }

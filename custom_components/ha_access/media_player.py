@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-
 from homeassistant.components import media_source
 from homeassistant.components.media_player import (MediaPlayerEntity, MediaPlayerEntityFeature,
                                                    MediaPlayerState, MediaType, async_process_play_media_url)
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.util import dt as dt_util
 
 from .entity import EntidadeHaAccess, montar
 
@@ -29,8 +26,8 @@ class PlayerHaAccess(EntidadeHaAccess, MediaPlayerEntity):
         | MediaPlayerEntityFeature.VOLUME_STEP | MediaPlayerEntityFeature.PLAY_MEDIA
         | MediaPlayerEntityFeature.SEEK)
 
-    def __init__(self, aparelho, definicao, plataforma):
-        super().__init__(aparelho, definicao, plataforma)
+    def aplicar(self, definicao):
+        super().aplicar(definicao)
         self._attr_name = None            # o player é o próprio computador
 
     async def async_added_to_hass(self):
@@ -53,7 +50,10 @@ class PlayerHaAccess(EntidadeHaAccess, MediaPlayerEntity):
     @property
     def volume_level(self):
         v = self._m.get("volume")
-        return None if v is None else max(0.0, min(1.0, float(v) / 100))
+        try:
+            return None if v is None else max(0.0, min(1.0, float(v) / 100))
+        except (TypeError, ValueError):
+            return None
 
     @property
     def is_volume_muted(self):
@@ -85,16 +85,24 @@ class PlayerHaAccess(EntidadeHaAccess, MediaPlayerEntity):
 
     @property
     def media_position_updated_at(self):
-        return dt_util.utcnow() if self._m.get("currentposition") is not None else None
+        return self.ap.midia_quando if self._m.get("currentposition") is not None else None
 
     @property
     def media_image_hash(self):
-        return hashlib.sha256(self.ap.capa).hexdigest()[:16] if self.ap.capa else None
+        return self.ap.capa_hash if self.ap.capa else None
 
     async def async_get_media_image(self):
-        return (self.ap.capa, "image/jpeg") if self.ap.capa else (None, None)
+        capa = self.ap.capa
+        if not capa:
+            return None, None
+        if capa.startswith(b"\x89PNG"):
+            return capa, "image/png"
+        if capa[:4] == b"RIFF" and capa[8:12] == b"WEBP":
+            return capa, "image/webp"
+        return capa, "image/jpeg"
 
-    def _cmd(self, comando, dado=None):
+    async def _cmd(self, comando, dado=None):
+        await self._checar_dono()
         dados = {"tipo": "midia", "command": comando}
         if dado is not None:
             dados["data"] = dado
@@ -102,37 +110,37 @@ class PlayerHaAccess(EntidadeHaAccess, MediaPlayerEntity):
             raise HomeAssistantError(f"{self.ap.nome} está desconectado")
 
     async def async_media_play(self):
-        self._cmd("play")
+        await self._cmd("play")
 
     async def async_media_pause(self):
-        self._cmd("pause")
+        await self._cmd("pause")
 
     async def async_media_stop(self):
-        self._cmd("stop")
+        await self._cmd("stop")
 
     async def async_media_next_track(self):
-        self._cmd("next")
+        await self._cmd("next")
 
     async def async_media_previous_track(self):
-        self._cmd("previous")
+        await self._cmd("previous")
 
     async def async_set_volume_level(self, volume):
-        self._cmd("setvolume", round(volume * 100))
+        await self._cmd("setvolume", round(volume * 100))
 
     async def async_mute_volume(self, mute):
-        self._cmd("mute", bool(mute))
+        await self._cmd("mute", bool(mute))
 
     async def async_volume_up(self):
-        self._cmd("volumeup")
+        await self._cmd("volumeup")
 
     async def async_volume_down(self):
-        self._cmd("volumedown")
+        await self._cmd("volumedown")
 
     async def async_media_seek(self, position):
-        self._cmd("seek", position)
+        await self._cmd("seek", position)
 
     async def async_play_media(self, media_type, media_id, **kwargs):
         if media_source.is_media_source_id(media_id):
             item = await media_source.async_resolve_media(self.hass, media_id, self.entity_id)
             media_id = item.url
-        self._cmd("playmedia", async_process_play_media_url(self.hass, media_id))
+        await self._cmd("playmedia", async_process_play_media_url(self.hass, media_id))

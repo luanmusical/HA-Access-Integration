@@ -15,7 +15,7 @@ class TravaHaAccess(ComandoHaAccess, LockEntity):
         return self.ligado
 
     async def async_lock(self, **kwargs):
-        self._mandar("lock")
+        await self._mandar("lock")
 
     async def async_unlock(self, **kwargs):
-        self._mandar("unlock")
+        await self._mandar("unlock")

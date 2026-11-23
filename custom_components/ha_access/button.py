@@ -11,4 +11,4 @@ async def async_setup_entry(hass, entry, adicionar):
 
 class BotaoHaAccess(ComandoHaAccess, ButtonEntity):
     async def async_press(self):
-        self._mandar("press")
+        await self._mandar("press")

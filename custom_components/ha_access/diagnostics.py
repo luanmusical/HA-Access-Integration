@@ -1,5 +1,6 @@
 """Diagnóstico para baixar (Configurações, Dispositivos e serviços, HA-Access, Baixar diagnóstico):
-aparelhos, versões, conexão e último sinal. Sem token nem valores pessoais."""
+aparelhos, versões, conexão e último sinal. Sem token, sem valores e sem o nome dos computadores
+(o arquivo costuma ir para um issue público)."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from .const import PROTOCOLO, VERSAO
 
 def _aparelho(ap):
     return {
-        "nome": ap.nome, "versao_programa": ap.info.get("versao"), "modelo": ap.info.get("modelo"),
+        "versao_programa": ap.info.get("versao"), "modelo": ap.info.get("modelo"),
         "conectado": ap.conectado,
         "segundos_desde_o_ultimo_sinal": round(time.monotonic() - ap.ultimo_sinal) if ap.ultimo_sinal else None,
         "sensores": len(ap.info.get("sensores", [])), "comandos": len(ap.info.get("comandos", [])),
@@ -23,7 +24,7 @@ def _aparelho(ap):
 async def async_get_config_entry_diagnostics(hass, entry):
     hub = entry.runtime_data
     return {"versao_integracao": VERSAO, "protocolo": PROTOCOLO,
-            "aparelhos": {s[:8] + "…": _aparelho(ap) for s, ap in hub.aparelhos.items()}}
+            "aparelhos": {f"computador {i}": _aparelho(ap) for i, ap in enumerate(hub.aparelhos.values(), 1)}}
 
 
 async def async_get_device_diagnostics(hass, entry, device):

@@ -25,11 +25,15 @@
   "issues": {
     "integracao_velha": {
       "title": "Atualize a integração HA-Access",
-      "description": "O programa HA-Access em {nome} (versão {versao_programa}) é mais novo que esta integração (versão {versao}). Atualize a integração HA-Access no HACS e reinicie o Home Assistant."
+      "description": "O programa HA-Access em {nome} (versão {versao_programa}) é mais novo que esta integração (versão {versao}). Atualize a integração HA-Access pela Marketplace (ou pelo HACS) e reinicie o Home Assistant."
     },
     "programa_velho": {
       "title": "Atualize o programa HA-Access em {nome}",
       "description": "O programa HA-Access em {nome} (versão {versao_programa}) é antigo demais para esta integração (versão {versao}). Atualize o programa naquele computador."
+    },
+    "programa_desatualizado": {
+      "title": "Atualize o programa HA-Access em {nome}",
+      "description": "O programa HA-Access em {nome} está na versão {versao_programa}. Ele funciona, mas a versão {recomendada} ou mais nova corrige falhas importantes. Atualize o programa naquele computador (ele avisa sozinho quando abre). Este aviso some quando o computador conectar atualizado."
     }
   },
   "device_automation": {
@@ -38,6 +42,29 @@
     },
     "extra_fields": {
       "acao": "Ação (vazio = qualquer botão)"
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "conectado": {
+        "name": "Conectado"
+      }
+    },
+    "notify": {
+      "notificacao": {
+        "name": "Notificação"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opções do HA-Access",
+        "description": "Ligado: os comandos, o player e o texto de cada computador só obedecem a quem o cadastrou (o dono) e a administradores. Automações continuam funcionando. Desligado (padrão): qualquer usuário do Home Assistant controla.",
+        "data": {
+          "so_dono": "Só o dono do computador e administradores controlam"
+        }
+      }
     }
   }
 }

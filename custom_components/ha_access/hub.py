@@ -9,17 +9,21 @@ entidades voltam na hora, indisponíveis até o computador conectar.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
-from .const import (APARELHOS_POR_USUARIO, DOMAIN, FABRICANTE, ID_CONECTADO, ID_NOTIFICACAO, PLATAFORMAS_COMANDO, PLATAFORMAS_SENSOR,
+from .const import (APARELHOS_POR_USUARIO, ATRIBUTOS_MAX, DOMAIN, FABRICANTE, ID_CONECTADO, ID_NOTIFICACAO, PLATAFORMAS_COMANDO, PLATAFORMAS_SENSOR,
                     SINAL_MAXIMO, VERSAO_STORE)
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,7 +42,10 @@ class Aparelho:
         self.valores = {}                 # id do sensor -> {"estado", "atributos"}
         self.comandos_ligados = {}        # id do comando -> bool
         self.midia = {}
+        self.midia_quando = None          # quando a posição da faixa chegou
         self.capa = None
+        self.capa_hash = None
+        self.mudo = False                 # conectado, mas sem sinal de vida há SINAL_MAXIMO (rede parada)
         self.entidades = {}               # (plataforma, id) -> entidade
         self.media_player = None
         self.usuario = None
@@ -55,7 +62,15 @@ class Aparelho:
 
     @property
     def conectado(self):
-        return self.enviar is not None
+        return self.enviar is not None and not self.mudo
+
+    def vivo(self):
+        """Chegou mensagem do programa: está vivo (e volta a ficar disponível se estava mudo)."""
+        self.ultimo_sinal = time.monotonic()
+        if self.mudo:
+            self.mudo = False
+            _LOGGER.info("%s voltou a dar sinal", self.nome)
+            self.avisar_entidades()
 
     def mandar(self, dados):
         if self.enviar is None:
@@ -87,10 +102,17 @@ class Hub:
             ap.device_id = self._registrar_aparelho(ap)
             self.aparelhos[serial] = ap
 
+    def _dados(self):
+        return {"aparelhos": {s: a.info for s, a in self.aparelhos.items()}}
+
     @callback
     def _gravar(self):
-        self._store.async_delay_save(
-            lambda: {"aparelhos": {s: a.info for s, a in self.aparelhos.items()}}, 2)
+        self._store.async_delay_save(self._dados, 2)
+
+    async def gravar_agora(self):
+        """Ao descarregar: a gravação adiada (2 s) não pode se perder (recarregar logo depois de um
+        computador conectar fazia a integração esquecê-lo)."""
+        await self._store.async_save(self._dados())
 
     # -- aparelho -------------------------------------------------------------------------
     def _registrar_aparelho(self, ap):
@@ -116,7 +138,8 @@ class Hub:
         return admin or (dono is not None and dono == usuario)
 
     def pode_conectar(self, serial, usuario, admin):
-        """Conectar: computador novo, sem dono (gravado antes de existir o dono) ou do próprio usuário."""
+        """Conectar: computador novo ou do próprio usuário. Sem dono gravado (de antes de existir o dono):
+        só administrador, senão o primeiro usuário qualquer que soubesse o serial ficava com ele."""
         if usuario is None:
             raise PermissionError("Conexão sem usuário do Home Assistant")
         ap = self.aparelhos.get(serial)
@@ -126,24 +149,36 @@ class Hub:
                 raise PermissionError(f"Limite de {APARELHOS_POR_USUARIO} computadores por usuário atingido; "
                                       "exclua um computador antigo ou peça a um administrador")
             return
-        if ap.info.get("dono") is None or self.autorizado(serial, usuario, admin):
+        if ap.info.get("dono") is None:
+            if admin:
+                return
+            # (se um administrador conectasse, ele viraria o dono e o usuário de verdade ficaria de fora)
+            raise PermissionError("Este computador foi cadastrado antes de existir dono no HA-Access. Peça a um "
+                                  "administrador para excluir o dispositivo dele no Home Assistant; na próxima "
+                                  "conexão ele entra de novo, já com você como dono")
+        if self.autorizado(serial, usuario, admin):
             return
         raise PermissionError("Este computador pertence a outro usuário do Home Assistant")
 
     @callback
     def sinal(self, serial):
+        """Sinal de vida. False: esta integração não tem a assinatura do computador (foi recarregada)."""
         ap = self.aparelhos.get(serial)
-        if ap is not None:
-            ap.ultimo_sinal = time.monotonic()
+        if ap is None or ap.enviar is None:
+            return False
+        ap.vivo()
+        return True
 
     @callback
     def vigiar(self, _agora=None):
         """Rede caiu "muda" (sem fechar a conexão): sem sinal por SINAL_MAXIMO, fica indisponível."""
         limite = time.monotonic() - SINAL_MAXIMO
         for ap in self.aparelhos.values():
-            if ap.enviar is not None and ap.ultimo_sinal < limite:
+            if ap.enviar is not None and not ap.mudo and ap.ultimo_sinal < limite:
+                # fica indisponível, mas a assinatura continua: se a rede voltar, o próximo sinal de
+                # vida devolve o computador (antes ficava indisponível até o programa reiniciar)
                 _LOGGER.info("%s sem sinal há mais de %s s: indisponível", ap.nome, SINAL_MAXIMO)
-                ap.enviar = None
+                ap.mudo = True
                 ap.avisar_entidades()
 
     async def conectar(self, msg, enviar, usuario, admin=False):
@@ -171,11 +206,13 @@ class Hub:
             # outra conexão do mesmo computador (reconectou antes da antiga cair)
             ap.enviar({"tipo": "substituido"})
         ap.enviar = enviar
+        ap.mudo = False
         ap.usuario = usuario
         ap.ultimo_sinal = time.monotonic()
         depois = self._chaves(ap.info)
         self._remover_entidades(ap, antes - depois)
         self._novas(ap, depois - antes)
+        self._atualizar_definicoes(ap)
         self._gravar()
         ap.avisar_entidades()
         if self.notify is not None:
@@ -204,8 +241,19 @@ class Hub:
         depois = self._chaves(ap.info)
         self._remover_entidades(ap, antes - depois)
         self._novas(ap, depois - antes)
+        self._atualizar_definicoes(ap)
         self._gravar()
         return True
+
+    def _atualizar_definicoes(self, ap):
+        """Sensor ou comando que continua, mas mudou (nome, unidade, ícone...): a entidade muda na hora,
+        sem ser apagada (o nome e a área que o usuário deu no HA ficam)."""
+        for (plataforma, ident), ent in list(ap.entidades.items()):
+            for d in self._defs(ap, plataforma):
+                if d["id"] == ident and d != ent.d:
+                    ent.aplicar(d)
+                    if ent.hass is not None:
+                        ent.async_write_ha_state()
 
     def _novas(self, ap, novas):
         for plataforma, chaves in self._por_plataforma(novas).items():
@@ -268,11 +316,18 @@ class Hub:
             ap.avisar_entidades()
 
     def desligar_todos(self):
+        """A integração vai descarregar (recarregar, atualizar): os programas conectam de novo."""
         for ap in self.aparelhos.values():
+            try:
+                ap.mandar({"tipo": "reconectar"})
+            except Exception:
+                pass
             ap.enviar = None
 
     async def esquecer(self, serial):
         ap = self.aparelhos.pop(serial, None)
+        ir.async_delete_issue(self.hass, DOMAIN, f"versao_{serial}")
+        ir.async_delete_issue(self.hass, DOMAIN, f"desatualizado_{serial}")
         if ap is not None:
             ap.mandar({"tipo": "removido"})
             self._gravar()
@@ -285,13 +340,28 @@ class Hub:
         ap = self.aparelhos.get(serial)
         if ap is None:
             return
-        ap.ultimo_sinal = time.monotonic()
+        ap.vivo()
         mudaram = []
+        # só o que o computador declarou (um id inventado a cada mensagem enchia a memória)
+        declarados = {d["id"] for d in ap.info.get("sensores", [])}
+        cmds_declarados = {d["id"] for d in ap.info.get("comandos", [])}
         for ident, valor in sensores.items():
+            if ident not in declarados:
+                continue
+            atributos = valor.get("atributos")
+            if atributos:
+                try:
+                    grande = len(json.dumps(atributos, default=str)) > ATRIBUTOS_MAX
+                except (TypeError, ValueError):
+                    grande = True
+                if grande:
+                    valor = dict(valor, atributos=None)
             if ap.valores.get(ident) != valor:
                 ap.valores[ident] = valor
                 mudaram += [e for (p, i), e in ap.entidades.items() if i == ident and p in PLATAFORMAS_SENSOR]
         for ident, ligado in comandos.items():
+            if ident not in cmds_declarados:
+                continue
             if ap.comandos_ligados.get(ident) != ligado:
                 ap.comandos_ligados[ident] = ligado
                 mudaram += [e for (p, i), e in ap.entidades.items() if i == ident and p in PLATAFORMAS_COMANDO]
@@ -304,9 +374,12 @@ class Hub:
         ap = self.aparelhos.get(serial)
         if ap is None:
             return
-        ap.ultimo_sinal = time.monotonic()
-        ap.midia = estado
+        ap.vivo()
+        if estado:                   # programa antigo manda {} quando só a capa mudou: fica o que tocava
+            ap.midia = estado
+            ap.midia_quando = dt_util.utcnow()
         if capa is not ...:          # ... = a capa não mudou
             ap.capa = capa
+            ap.capa_hash = hashlib.sha256(capa).hexdigest()[:16] if capa else None
         if ap.media_player is not None and ap.media_player.hass is not None:
             ap.media_player.async_write_ha_state()

@@ -22,21 +22,24 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from datetime import timedelta
 
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import discovery
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import service
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (CAPA_MAX, DOMAIN, EVENTO_ACAO, ITENS_MAX, PLATAFORMAS, PLATAFORMAS_COMANDO,
-                    PLATAFORMAS_SENSOR, PROTOCOLO, PROTOCOLO_MINIMO, TEXTO_MAX, VERSAO)
+                    PLATAFORMAS_SENSOR, PROGRAMA_RECOMENDADO, PROTOCOLO, PROTOCOLO_MINIMO, TEXTO_MAX, VERSAO)
 from .hub import Hub
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -55,6 +58,7 @@ DEF_SENSOR = vol.Schema({
     vol.Optional("unidade"): TEXTO_OPCIONAL, vol.Optional("device_class"): TEXTO_OPCIONAL,
     vol.Optional("state_class"): TEXTO_OPCIONAL, vol.Optional("icone"): TEXTO_OPCIONAL,
     vol.Optional("sempre_disponivel", default=False): bool, vol.Optional("categoria"): TEXTO_OPCIONAL,
+    vol.Optional("opcoes"): vol.Any(None, vol.All([TEXTO], vol.Length(max=100))),
 }, extra=vol.REMOVE_EXTRA)
 DEF_COMANDO = vol.Schema({
     vol.Required("id"): ID_ITEM, vol.Required("nome"): NOME,
@@ -65,10 +69,57 @@ SENSORES = vol.All([DEF_SENSOR], vol.Length(max=ITENS_MAX))
 COMANDOS = vol.All([DEF_COMANDO], vol.Length(max=ITENS_MAX))
 
 
+def _cortar(v):
+    return str(v)[:TEXTO_MAX]
+
+
+_NUMERO = vol.Any(None, vol.All(vol.Coerce(float), vol.Clamp(min=0, max=10_000_000)))
+_TEXTO_CORTADO = vol.Any(None, vol.All(vol.Coerce(str), _cortar))
+# o que está tocando: só os campos que o player usa, com tipo e tamanho (antes um volume em texto
+# quebrava o player inteiro)
+MIDIA = vol.Schema({
+    vol.Optional("state"): _TEXTO_CORTADO,
+    vol.Optional("volume"): vol.Any(None, vol.All(vol.Coerce(float), vol.Clamp(min=0, max=100))),
+    vol.Optional("muted"): vol.Any(None, bool),
+    vol.Optional("title"): _TEXTO_CORTADO, vol.Optional("artist"): _TEXTO_CORTADO,
+    vol.Optional("albumtitle"): _TEXTO_CORTADO, vol.Optional("albumartist"): _TEXTO_CORTADO,
+    vol.Optional("duration"): _NUMERO, vol.Optional("currentposition"): _NUMERO,
+}, extra=vol.REMOVE_EXTRA)
+
+# texto livre vira teclas ou argumentos no computador: limite e só administrador ou o dono
+TEXTO_LIVRE_MAX = 2000
+
+
 async def async_setup(hass: HomeAssistant, config) -> bool:
     for f in (ws_conectar, ws_definir, ws_estados, ws_midia, ws_acao_notificacao, ws_tag, ws_vivo):
         websocket_api.async_register_command(hass, f)
+
+    # Uma ação só para os 5 tipos de comando (interruptor, botão, luz, fechadura, sirene). Antes cada
+    # plataforma tentava registrar a sua: só a primeira valia, e depois de recarregar a integração a
+    # ação apontava para entidades que já não existiam.
+    async def enviar_texto(call: ServiceCall) -> None:
+        await _enviar_texto(hass, call)
+
+    hass.services.async_register(
+        DOMAIN, "enviar_texto", enviar_texto,
+        schema=cv.make_entity_service_schema({vol.Required("texto"): vol.All(str, vol.Length(max=TEXTO_LIVRE_MAX))}))
     return True
+
+
+async def _enviar_texto(hass, call):
+    hub = hass.data.get(DOMAIN)
+    if hub is None:
+        raise HomeAssistantError("A integração HA-Access não está carregada")
+    try:
+        ids = await service.async_extract_entity_ids(call)
+    except TypeError:                          # Home Assistant mais antigo: pedia também o hass
+        ids = await service.async_extract_entity_ids(hass, call)
+    alvos = [e for ap in list(hub.aparelhos.values()) for (p, _i), e in list(ap.entidades.items())
+             if p in PLATAFORMAS_COMANDO and e.entity_id in ids]
+    if not alvos:
+        raise ServiceValidationError("Escolha um comando de um computador com o HA-Access")
+    for ent in alvos:
+        await ent.async_enviar_texto(call.data["texto"], call.context)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -76,6 +127,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hub.carregar()
     entry.runtime_data = hub
     hass.data[DOMAIN] = hub
+    servico = hass.data.get(f"{DOMAIN}_notify")
+    if servico not in (None, True):
+        hub.notify = servico                  # integração recarregada: o serviço notify antigo continua
     await hass.config_entries.async_forward_entry_setups(entry, PLATAFORMAS)
     # sinal de vida: computador mudo por SINAL_MAXIMO fica indisponível
     entry.async_on_unload(async_track_time_interval(hass, hub.vigiar, timedelta(seconds=15)))
@@ -89,6 +143,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hub: Hub = entry.runtime_data
     hub.desligar_todos()
+    await hub.gravar_agora()
     ok = await hass.config_entries.async_unload_platforms(entry, PLATAFORMAS)
     if ok:
         hass.data.pop(DOMAIN, None)
@@ -138,6 +193,24 @@ def _issue_versao(serial):
     return f"versao_{serial}"
 
 
+def _issue_desatualizado(serial):
+    return f"desatualizado_{serial}"
+
+
+def _numeros(versao):
+    """'0.6.0' -> (0, 6, 0); texto estranho -> None."""
+    try:
+        partes = [int(p) for p in str(versao).strip().lstrip("vV").split(".")[:3]]
+    except ValueError:
+        return None
+    return tuple(partes + [0] * (3 - len(partes)))         # "0.6" vale "0.6.0"
+
+
+def _sem_marcacao(texto):
+    """Nome do computador no texto de Reparos (que é markdown): sem links nem formatação."""
+    return re.sub(r"[\[\]()<>*_`#|!~]", " ", texto)[:80]
+
+
 # -- comandos websocket -------------------------------------------------------------------------
 @websocket_api.websocket_command({
     vol.Required("type"): "ha_access/conectar",
@@ -167,10 +240,13 @@ async def ws_conectar(hass, connection, msg):
         return
     if not PROTOCOLO_MINIMO <= msg["protocolo"] <= PROTOCOLO:
         programa_novo = msg["protocolo"] > PROTOCOLO
-        ir.async_create_issue(
-            hass, DOMAIN, _issue_versao(serial), is_fixable=False, severity=ir.IssueSeverity.WARNING,
-            translation_key="integracao_velha" if programa_novo else "programa_velho",
-            translation_placeholders={"nome": msg["nome"], "versao": VERSAO, "versao_programa": msg["versao"]})
+        if serial in hub.aparelhos:
+            # só computador já conhecido: um serial inventado a cada pedido não enche os Reparos
+            ir.async_create_issue(
+                hass, DOMAIN, _issue_versao(serial), is_fixable=False, severity=ir.IssueSeverity.WARNING,
+                translation_key="integracao_velha" if programa_novo else "programa_velho",
+                translation_placeholders={"nome": _sem_marcacao(msg["nome"]), "versao": VERSAO,
+                                          "versao_programa": _sem_marcacao(msg["versao"])})
         connection.send_error(ident, "versao_incompativel",
                               "Atualize a integração HA-Access no Home Assistant" if programa_novo else
                               "Atualize o programa HA-Access neste computador")
@@ -188,6 +264,17 @@ async def ws_conectar(hass, connection, msg):
                               str(e) or "Este computador pertence a outro usuário do Home Assistant")
         return
 
+    # programa que conversa, mas é mais velho que o recomendado: aviso em Reparos (some ao atualizar)
+    tem, minimo = _numeros(msg["versao"]), _numeros(PROGRAMA_RECOMENDADO)
+    if tem is not None and minimo is not None and tem < minimo:
+        ir.async_create_issue(
+            hass, DOMAIN, _issue_desatualizado(serial), is_fixable=False, severity=ir.IssueSeverity.WARNING,
+            translation_key="programa_desatualizado",
+            translation_placeholders={"nome": _sem_marcacao(msg["nome"]), "versao_programa": _sem_marcacao(msg["versao"]),
+                                      "recomendada": PROGRAMA_RECOMENDADO})
+    else:
+        ir.async_delete_issue(hass, DOMAIN, _issue_desatualizado(serial))
+
     @callback
     def cancelar():
         hub.desconectar(serial, enviar)
@@ -204,7 +291,11 @@ def ws_vivo(hass, connection, msg):
     hub = _hub(hass, connection, msg)
     if hub is None:
         return
-    hub.sinal(msg["serial"])
+    if not hub.sinal(msg["serial"]):
+        # a assinatura desta conexão não vale mais (a integração foi recarregada): o programa
+        # reconecta em vez de ficar "conectado" com o computador indisponível no HA
+        connection.send_error(msg["id"], "nao_conectado", "Conecte de novo com ha_access/conectar")
+        return
     connection.send_result(msg["id"])
 
 
@@ -243,7 +334,7 @@ def ws_estados(hass, connection, msg):
 @websocket_api.websocket_command({
     vol.Required("type"): "ha_access/midia",
     vol.Required("serial"): SERIAL,
-    vol.Required("estado"): dict,
+    vol.Required("estado"): MIDIA,
     vol.Optional("capa"): vol.Any(vol.All(str, vol.Length(max=CAPA_MAX)), None),
 })
 @callback

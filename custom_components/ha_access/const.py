@@ -2,7 +2,10 @@
 
 DOMAIN = "ha_access"
 FABRICANTE = "L-R Productions (HA-Access)"
-VERSAO = "0.2.1"                 # igual ao manifest.json
+VERSAO = "0.2.2"                 # igual ao manifest.json
+# Programa mais velho que isto: aviso em Reparos (funciona, mas falta correção importante)
+PROGRAMA_RECOMENDADO = "0.6.0"
+OPCAO_SO_DONO = "so_dono"        # opção: só o dono e administradores controlam o computador
 VERSAO_STORE = 1
 EVENTO_ACAO = "ha_access_notification_action"
 
@@ -17,6 +20,7 @@ SINAL_MAXIMO = 75
 
 TEXTO_MAX = 255                  # nomes, versões, ids de etiqueta e de ação
 ITENS_MAX = 500                  # sensores ou comandos de um computador
+ATRIBUTOS_MAX = 4096              # atributos de um sensor, em JSON (o banco do HA avisa acima de 16 KB)
 CAPA_MAX = 3_000_000             # capa do player em base64 (uns 2 MB de imagem)
 APARELHOS_POR_USUARIO = 20       # computadores que um usuário comum pode apresentar (admin: sem limite)
 
